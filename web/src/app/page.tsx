@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useSSE } from '@/hooks/useSSE';
+import { BenchmarkModal } from '@/components/BenchmarkModal';
 
 const ROUTES: Record<string, { desc: string; label: string }> = {
   chopped: {
@@ -50,9 +51,13 @@ export default function Home() {
   const [baseUrl, setBaseUrl] = useState('http://localhost:8791');
   const [currentRoute, setCurrentRoute] = useState('chopped');
   const [useProxy, setUseProxy] = useState(false);
+  const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
 
   const {
     status,
+    engine,
+    setEngine,
+    wasmReady,
     rawReads,
     events,
     assembledText,
@@ -79,36 +84,79 @@ export default function Home() {
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold tracking-tight text-white">SSE Lab</h1>
               <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-blue-900/50 text-blue-400 border border-blue-700/50">
-                Next.js Consumer + Rust Server
+                Rust Axum + Next.js + Rust Wasm
               </span>
             </div>
             <p className="text-sm text-[#8b949e] mt-1">
-              Visualizing how Server-Sent Events behave over raw TCP socket streams and LLM outputs.
+              Deep dive into Server-Sent Events, TCP chunk fragmentation, and Rust WebAssembly parser benchmarking.
             </p>
           </div>
 
-          {/* Target SSE Server Configuration */}
-          <div className="flex flex-wrap items-center gap-3 bg-[#161b22] border border-[#262d36] p-2.5 rounded-lg text-xs">
-            <div className="flex items-center gap-2">
-              <span className="text-[#8b949e]">Server URL:</span>
-              <input
-                type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                className="bg-[#0d1117] border border-[#30363d] rounded px-2.5 py-1 text-[#e6edf3] font-mono text-xs w-48 focus:outline-none focus:border-blue-500"
-              />
+          {/* Target SSE Server Configuration & Wasm Benchmark Button */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setIsBenchmarkOpen(true)}
+              className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-medium text-xs shadow-sm flex items-center gap-1.5 transition-all"
+            >
+              ⚡ Live Benchmark (JS vs Wasm)
+            </button>
+
+            <div className="flex flex-wrap items-center gap-3 bg-[#161b22] border border-[#262d36] p-2 rounded-lg text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-[#8b949e]">Server:</span>
+                <input
+                  type="text"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  className="bg-[#0d1117] border border-[#30363d] rounded px-2 py-0.5 text-[#e6edf3] font-mono text-xs w-44 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <label className="flex items-center gap-1.5 cursor-pointer text-[#8b949e] hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={useProxy}
+                  onChange={(e) => setUseProxy(e.target.checked)}
+                  className="rounded border-[#30363d] bg-[#0d1117] text-blue-500 focus:ring-0"
+                />
+                Proxy (BFF)
+              </label>
             </div>
-            <label className="flex items-center gap-1.5 cursor-pointer text-[#8b949e] hover:text-white">
-              <input
-                type="checkbox"
-                checked={useProxy}
-                onChange={(e) => setUseProxy(e.target.checked)}
-                className="rounded border-[#30363d] bg-[#0d1117] text-blue-500 focus:ring-0"
-              />
-              Next.js Proxy (BFF)
-            </label>
           </div>
         </header>
+
+        {/* Parser Engine Selector */}
+        <div className="flex items-center justify-between bg-[#161b22] border border-[#262d36] rounded-lg p-3 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-white">Parser Engine:</span>
+            <span className="text-[#8b949e]">Select parser implementation to consume the stream:</span>
+          </div>
+          <div className="flex items-center gap-1.5 bg-[#0d1117] p-1 rounded-md border border-[#262d36]">
+            <button
+              onClick={() => setEngine('typescript')}
+              className={`px-3 py-1 rounded text-xs font-mono transition-colors ${
+                engine === 'typescript'
+                  ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                  : 'text-[#8b949e] hover:text-white'
+              }`}
+            >
+              Pure TypeScript
+            </button>
+            <button
+              onClick={() => setEngine('rust-wasm')}
+              disabled={!wasmReady}
+              className={`px-3 py-1 rounded text-xs font-mono flex items-center gap-1 transition-colors ${
+                engine === 'rust-wasm'
+                  ? 'bg-purple-600 text-white font-semibold shadow-xs'
+                  : wasmReady
+                  ? 'text-[#8b949e] hover:text-white'
+                  : 'opacity-40 cursor-not-allowed'
+              }`}
+            >
+              <span>🦀 Rust WebAssembly</span>
+              {wasmReady && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>}
+            </button>
+          </div>
+        </div>
 
         {/* Route Selector */}
         <div className="space-y-3">
@@ -144,7 +192,7 @@ export default function Home() {
             <button
               onClick={handleRun}
               disabled={status === 'streaming'}
-              className="px-5 py-2 rounded-md font-medium text-sm bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              className="px-5 py-2 rounded-md font-medium text-sm bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
             >
               Run Stream
             </button>
@@ -182,7 +230,7 @@ export default function Home() {
         </div>
 
         {/* Metrics Bar */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="bg-[#161b22] border border-[#262d36] rounded-lg p-3.5">
             <div className="text-[11px] uppercase tracking-wider font-semibold text-[#8b949e]">
               First Byte (TTFB)
@@ -193,7 +241,7 @@ export default function Home() {
           </div>
           <div className="bg-[#161b22] border border-[#262d36] rounded-lg p-3.5">
             <div className="text-[11px] uppercase tracking-wider font-semibold text-[#8b949e]">
-              Socket Reads (Chunks)
+              Socket Reads
             </div>
             <div className="text-xl font-bold text-amber-400 mt-1 font-mono">
               {metrics.readsCount}
@@ -209,7 +257,16 @@ export default function Home() {
           </div>
           <div className="bg-[#161b22] border border-[#262d36] rounded-lg p-3.5">
             <div className="text-[11px] uppercase tracking-wider font-semibold text-[#8b949e]">
-              Elapsed Time
+              Parse CPU Time
+            </div>
+            <div className="text-xl font-bold text-purple-400 mt-1 font-mono">
+              {metrics.parseTimeMs}
+              <span className="text-xs text-[#8b949e] font-normal ml-1">ms</span>
+            </div>
+          </div>
+          <div className="bg-[#161b22] border border-[#262d36] rounded-lg p-3.5">
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-[#8b949e]">
+              Elapsed Total
             </div>
             <div className="text-xl font-bold text-white mt-1 font-mono">
               {metrics.elapsedMs}
@@ -243,7 +300,9 @@ export default function Home() {
           <div className="bg-[#161b22] border border-[#262d36] rounded-lg overflow-hidden flex flex-col">
             <div className="px-4 py-2.5 border-b border-[#262d36] flex items-center justify-between text-xs font-semibold text-[#8b949e] uppercase tracking-wider">
               <span>Events After Carry Buffering</span>
-              <span className="text-[10px] text-emerald-400/80 font-mono">\n\n Framed</span>
+              <span className="text-[10px] text-emerald-400/80 font-mono">
+                {engine === 'rust-wasm' ? '🦀 Wasm Engine' : '⚡ TS Engine'}
+              </span>
             </div>
             <div className="p-3 h-80 overflow-y-auto font-mono text-xs space-y-1 bg-[#0d1117]/50">
               {events.length === 0 && (
@@ -310,6 +369,9 @@ export default function Home() {
           </div>
         </div>
       </main>
+
+      {/* Benchmark Modal */}
+      <BenchmarkModal isOpen={isBenchmarkOpen} onClose={() => setIsBenchmarkOpen(false)} />
     </div>
   );
 }

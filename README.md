@@ -1,34 +1,46 @@
 # 🧪 SSE Lab: LLM 스트리밍 엔지니어링 & 실험실
 
-> **Server-Sent Events(SSE)**가 실제 네트워크(TCP)와 LLM 토큰 스트림 환경에서 어떻게 동작하고, 어디서 데이터가 깨지는지 직접 확인하고 학습하는 종합 실험실입니다.
+> **Server-Sent Events(SSE)**가 실제 네트워크(TCP)와 LLM 토큰 스트림 환경에서 어떻게 동작하고, 어디서 데이터가 깨지는지 직접 확인하고 학습하는 종합 실험실입니다.  
+> **Rust 비동기 백엔드** + **Next.js 대시보드** + **Rust WebAssembly 고속 파서 & 벤치마크 엔진**으로 구성되어 있습니다.
 
 ---
 
 ## 🏛 시스템 아키텍처
 
 ```
-┌────────────────────────────────────────────────────────┐
-│ [외부 독립 서버] server-rs                             │
-│ Rust (Axum + Tokio 비동기 스트림)                      │
-│ 포트: 8791 (text/event-stream)                         │
-└───────────────────────────┬────────────────────────────┘
-                            │
-                            │ (TCP Socket Chunk Stream)
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│ [프론트엔드 Consumer] web/                              │
-│ Next.js 15 (App Router + TypeScript + Tailwind)        │
-│                                                        │
-│  ├── lib/sse-parser.ts   : Carry-Buffer 기반 파서 엔진  │
-│  ├── hooks/useSSE.ts     : ReadableStream 및 지표 수집 훅│
-│  ├── app/page.tsx        : Raw vs Parsed 실시간 대시보드│
-│  └── app/api/proxy/      : BFF Streaming Relay (Proxy) │
-└────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ [외부 독립 서버] server-rs (Rust Axum + Tokio)                         │
+│ 포트: 8791 (text/event-stream)                                         │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    │ (TCP Socket Chunk Stream)
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ [프론트엔드 Consumer] web/ (Next.js 15 App Router + TypeScript)        │
+│                                                                        │
+│  ├── lib/sse-parser.ts         : Pure TypeScript Carry-Buffer 파서    │
+│  ├── 🦀 wasm-parser/ (Wasm)    : Rust 컴파일 WebAssembly 초고속 파서    │
+│  ├── hooks/useSSE.ts           : JS/Wasm 듀얼 엔진 & 실시간 지표 훅    │
+│  ├── components/BenchmarkModal : 대용량 스트림 JS vs Wasm 벤치마크 뷰어│
+│  └── app/api/proxy/            : BFF Streaming Relay (Proxy)           │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📚 1. SSE(Server-Sent Events)의 본질
+## ⚡ 1. 왜 Rust WebAssembly(Wasm) 파서인가?
+
+초당 수백~수천 개의 LLM 토큰 이벤트가 쏟아지는 대규모 스트리밍 환경에서는 브라우저의 JavaScript 메인 스레드에 다음과 같은 부하가 발생합니다:
+* **가비지 컬렉션(GC) 스파이크**: 수많은 문자열 청크 split/인스턴스 생성으로 인한 UI 버벅임(Frame Drop).
+* **파싱 CPU 병목**: 불완전한 TCP 청크 복원 및 정규식 처리 비용.
+
+이를 해결하기 위해 **Rust로 작성된 고성능 스트림 파서를 WebAssembly로 컴파일(`wasm-parser`)**하여 브라우저에 탑재했습니다.
+* **Zero GC Overhead**: Rust의 선형 메모리 버퍼에서 직접 청크 병합 및 분할.
+* **실시간 벤치마크 지원**: 대시보드 상단의 `⚡ Live Benchmark` 버튼을 통해 1만~5만 개 이벤트 기준 **JS 대비 Wasm의 파싱 처리 속도(ops/sec) 및 소요 시간 비교** 가능.
+
+---
+
+## 📚 2. SSE(Server-Sent Events)의 본질
 
 ### "SSE는 프로토콜이 아니라, 끝나지 않는 HTTP 응답 규격이다"
 
@@ -49,7 +61,7 @@ Transfer-Encoding: chunked
 
 ---
 
-## ⚠️ 2. 핵심 원리: "청크(Chunk)는 이벤트(Event)가 아니다"
+## ⚠️ 3. 핵심 원리: "청크(Chunk)는 이벤트(Event)가 아니다"
 
 가장 흔하게 발생하는 스트리밍 파서 버그는 **"소켓에서 1번 읽어 들인 청크(read chunk)가 1개의 완성된 이벤트일 것"**이라고 잘못 가정하는 것입니다.
 
@@ -63,7 +75,7 @@ Transfer-Encoding: chunked
 
 TCP는 애플리케이션의 `\n\n` 경계를 전혀 알지 못합니다. 필드명 중간(`"da"`, `"ta: "`)에서 잘리거나, 여러 이벤트가 한 번에 합쳐져서 도착합니다.
 
-### 💡 해결책: Carry Buffer 알고리즘 (`web/src/lib/sse-parser.ts`)
+### 💡 해결책: Carry Buffer 알고리즘
 
 ```typescript
 // 남은 미완성 조각(carry)을 들고 있다가 다음 청크와 이어 붙입니다.
@@ -78,7 +90,7 @@ for (const part of parts) {
 
 ---
 
-## 🔬 3. 10가지 시나리오별 상세 분석 (Lab Scenarios)
+## 🔬 4. 10가지 시나리오별 상세 분석 (Lab Scenarios)
 
 대시보드(`http://localhost:3000`)에서 아래 시나리오들을 직접 실행하며 결과를 비교할 수 있습니다:
 
@@ -97,7 +109,7 @@ for (const part of parts) {
 
 ---
 
-## 🛠 4. 프로덕션 SSE 운영 시 필수 체크리스트
+## 🛠 5. 프로덕션 SSE 운영 시 필수 체크리스트
 
 1. **Nginx / ALB 버퍼링 해제**
    * Nginx: `X-Accel-Buffering: no` 헤더 전송 또는 `proxy_buffering off;`
@@ -111,17 +123,19 @@ for (const part of parts) {
 
 ---
 
-## 🚀 5. 실행 방법
+## 🚀 6. 실행 방법
 
 ### 사전 요구사항
 * Node.js >= 18
 * Rust & Cargo (1.80+)
+* wasm-pack
 
 ### 실행 명령어
 
 ```bash
-# 1. 의존성 설치
+# 1. 의존성 설치 및 Wasm 빌드
 npm install
+npm run wasm:build
 cd web && npm install && cd ..
 
 # 2. Rust SSE Mock 서버 실행 (포트 8791)
@@ -129,11 +143,6 @@ npm run server:rs
 
 # 3. Next.js 클라이언트 대시보드 실행 (포트 3000)
 npm run web
-
-# 4. (선택) CLI 파서 테스트
-npm run reads    # TCP 청크 날것의 상태 확인
-npm run naive    # 버퍼 없는 나이브 파서의 토큰 유실 확인
-npm run blocks   # Anthropic 블록 파싱 결과 확인
 ```
 
-브라우저에서 **`http://localhost:3000`**으로 접속하여 실험실 대시보드를 확인하세요.
+브라우저에서 **`http://localhost:3000`**으로 접속하여 대시보드 및 Wasm 벤치마크를 확인하세요.

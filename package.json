@@ -9,6 +9,7 @@
     "server:rs": "cargo run --manifest-path server-rs/Cargo.toml",
     "server:node": "node server.mjs",
     "web": "npm --prefix web run dev",
+    "wasm:build": "cd wasm-parser && wasm-pack build --target web --out-dir ../web/public/wasm",
     "reads": "node read.mjs chopped reads",
     "naive": "node read.mjs chopped naive",
     "blocks": "node read.mjs anthropic blocks",
