@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSE lab</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #262d36;
+    --fg: #e6edf3; --dim: #8b949e; --accent: #2f81f7;
+    --good: #3fb950; --warn: #d29922; --bad: #f85149;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
+  .sub { margin: 6px 0 0; color: var(--dim); font-size: 13px; }
+  .sub code { color: var(--fg); }
+
+  .routes { display: flex; flex-wrap: wrap; gap: 6px; margin: 22px 0 14px; }
+  .routes button {
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+    padding: 6px 12px; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .routes button:hover:not(:disabled) { border-color: var(--accent); }
+  .routes button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .routes button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .desc {
+    background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 11px 14px; margin-bottom: 14px; font-size: 13px; color: var(--dim);
+  }
+  .desc b { color: var(--fg); font-weight: 600; }
+
+  .bar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .bar button {
+    padding: 8px 16px; border-radius: 6px; font: inherit; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--fg);
+  }
+  .bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .bar button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .stat span { display: block; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+  .stat b { display: block; margin-top: 3px; font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .panes { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2,1fr); } }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .pane h2 {
+    margin: 0; padding: 9px 13px; font-size: 12px; font-weight: 600;
+    border-bottom: 1px solid var(--line); color: var(--dim);
+    text-transform: uppercase; letter-spacing: .06em;
+  }
+  .pane .body {
+    height: 320px; overflow-y: auto; padding: 10px 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5;
+  }
+  .row { padding: 1px 0; white-space: pre-wrap; word-break: break-all; }
+  .n { color: var(--dim); }
+  .ev { color: var(--good); }
+  .thinking { color: var(--warn); }
+  .tool { color: #d2a8ff; }
+  .err { color: var(--bad); }
+  .out { padding: 13px; white-space: pre-wrap; min-height: 64px; }
+  footer { margin-top: 22px; color: var(--dim); font-size: 12px; }
+  footer code { color: var(--fg); }
+</style>
+</head>
+<body>
+<main>
+  <h1>SSE lab</h1>
+  <p class="sub">Start the server with <code>node server.mjs</code>, then pick a route. The left pane is what the socket handed over; the right is what a parser made of it.</p>
+
+  <div class="routes" id="routes"></div>
+  <div class="desc" id="desc"></div>
+
+  <div class="bar">
+    <button class="primary" id="run">Run</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="clear">Clear</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><span>first byte</span><b id="s-first">—</b></div>
+    <div class="stat"><span>reads</span><b id="s-reads">0</b></div>
+    <div class="stat"><span>events</span><b id="s-events">0</b></div>
+    <div class="stat"><span>elapsed</span><b id="s-ms">0<small>ms</small></b></div>
+  </div>
+
+  <div class="panes">
+    <div class="pane"><h2>raw reads from the socket</h2><div class="body" id="raw"></div></div>
+    <div class="pane"><h2>events after buffering</h2><div class="body" id="events"></div></div>
+  </div>
+
+  <div class="pane" style="margin-top:12px">
+    <h2>assembled output</h2>
+    <div class="out" id="out"></div>
+  </div>
+
+  <footer>
+    Compare <code>reads</code> with <code>events</code>. They are rarely the same number, and on
+    <code>/chopped</code> almost no read lines up with an event boundary — which is the whole
+    reason a parser needs a buffer that survives across reads.
+  </footer>
+</main>
+
+<script type="module">
+const BASE = `http://${location.hostname || 'localhost'}:8791`
+
+const ROUTES = {
+  plain:       'One event per token, cleanly framed. The version tutorials show.',
+  chopped:     'The same events, written in 7-byte pieces. <b>Watch the read count against the event count.</b> A parser that treats a read as a message loses almost everything.',
+  quirks:      'Comments, named events, multi-line data, ids, CRLF, and a final event with no trailing blank line. The last one is dropped by parsers that only emit on a blank line.',
+  anthropic:   'Typed indexed blocks. <b>thinking</b>, <b>text</b> and <b>tool_use</b> are separate at the source, and <code>content_block_stop</code> says when a block is final — no guessing from the text.',
+  openai:      'One flat text stream ending in a <code>[DONE]</code> string. No block boundaries at all.',
+  buffered:    'gzip with no flush. Every byte arrives — at the end, in one read. <b>Check first byte against elapsed.</b> The body looks identical to a working stream.',
+  truncated:   'The socket dies mid-answer. Note that the reader reports a clean end, not an error: nothing in the protocol says the response was incomplete.',
+  duplicating: 'Drops once, and the payload carries no ids. Reconnecting can only replay from the top, so whatever is already on screen doubles.',
+  resumable:   'Drops once, but every event carries an id. Reconnecting with <code>Last-Event-ID</code> resumes exactly where it stopped.',
+  firehose:    'Writes flat out for 3 seconds. The server blocks when the socket fills; a browser tab that renders slowly throttles the producer without asking.',
+}
+
+const $ = (id) => document.getElementById(id)
+let route = 'chopped'
+let controller = null
+
+const routesEl = $('routes')
+for (const name of Object.keys(ROUTES)) {
+  const b = document.createElement('button')
+  b.textContent = '/' + name
+  b.onclick = () => { route = name; paint() }
+  b.dataset.route = name
+  routesEl.appendChild(b)
+}
+
+function paint() {
+  for (const b of routesEl.children) b.classList.toggle('on', b.dataset.route === route)
+  $('desc').innerHTML = ROUTES[route]
+}
+
+function clear() {
+  $('raw').innerHTML = ''
+  $('events').innerHTML = ''
+  $('out').textContent = ''
+  $('s-first').textContent = '—'
+  $('s-reads').textContent = '0'
+  $('s-events').textContent = '0'
+  $('s-ms').innerHTML = '0<small>ms</small>'
+}
+
+function line(paneId, html, cls = '') {
+  const pane = $(paneId)
+  const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 30
+  const div = document.createElement('div')
+  div.className = 'row ' + cls
+  div.innerHTML = html
+  pane.appendChild(div)
+  if (atBottom) pane.scrollTop = pane.scrollHeight
+}
+
+const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])
+const vis = (s) => esc(JSON.stringify(s))
+
+async function run() {
+  clear()
+  controller = new AbortController()
+  $('run').disabled = true
+  $('stop').disabled = false
+
+  const t0 = performance.now()
+  let reads = 0, events = 0, first = null
+  let carry = ''
+  let out = ''
+  const blocks = new Map()
+
+  const tick = () => {
+    $('s-reads').textContent = reads
+    $('s-events').textContent = events
+    $('s-ms').innerHTML = Math.round(performance.now() - t0) + '<small>ms</small>'
+  }
+  const timer = setInterval(tick, 100)
+
+  try {
+    const res = await fetch(`${BASE}/${route}`, {
+      headers: { Accept: 'text/event-stream' },
+      signal: controller.signal,
+    })
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) { line('events', '— stream ended —', 'n'); break }
+      if (first === null) {
+        first = Math.round(performance.now() - t0)
+        $('s-first').textContent = first + 'ms'
+      }
+      reads++
+      const chunk = dec.decode(value, { stream: true })
+      if (reads <= 400) line('raw', `<span class="n">${String(reads).padStart(3)}</span>  ${vis(chunk)}`)
+
+      carry += chunk
+      const parts = carry.split(/\r\n\r\n|\n\n|\r\r/)
+      carry = parts.pop() ?? ''
+
+      for (const part of parts) {
+        const fields = { event: 'message', data: [], id: null }
+        for (const raw of part.split(/\r\n|\n|\r/)) {
+          if (raw === '' || raw.startsWith(':')) continue
+          const i = raw.indexOf(':')
+          const k = i === -1 ? raw : raw.slice(0, i)
+          let v = i === -1 ? '' : raw.slice(i + 1)
+          if (v.startsWith(' ')) v = v.slice(1)
+          if (k === 'data') fields.data.push(v)
+          else if (k === 'event') fields.event = v
+          else if (k === 'id') fields.id = v
+        }
+        const data = fields.data.join('\n')
+        if (!fields.data.length && fields.event === 'message') continue
+        events++
+
+        if (route === 'anthropic') {
+          const e = JSON.parse(data)
+          if (e.type === 'content_block_start') {
+            blocks.set(e.index, { type: e.content_block.type, name: e.content_block.name, text: '' })
+            line('events', `[${e.index}] start <b>${e.content_block.type}</b>${e.content_block.name ? ' (' + e.content_block.name + ')' : ''}`,
+              e.content_block.type === 'thinking' ? 'thinking' : e.content_block.type === 'tool_use' ? 'tool' : 'ev')
+          } else if (e.type === 'content_block_delta') {
+            const b = blocks.get(e.index)
+            b.text += e.delta.text ?? e.delta.thinking ?? e.delta.partial_json ?? ''
+          } else if (e.type === 'content_block_stop') {
+            const b = blocks.get(e.index)
+            line('events', `[${e.index}] <b>stop</b> — final, safe to freeze`,
+              b.type === 'thinking' ? 'thinking' : b.type === 'tool_use' ? 'tool' : 'ev')
+          } else {
+            line('events', esc(e.type), 'n')
+          }
+          out = [...blocks.entries()].map(([i, b]) =>
+            `[${i}] ${b.type}${b.name ? ' (' + b.name + ')' : ''}\n${b.text}`).join('\n\n')
+        } else if (route === 'openai') {
+          if (data === '[DONE]') { line('events', '[DONE]', 'n'); continue }
+          const t = JSON.parse(data).choices?.[0]?.delta?.content ?? ''
+          out += t
+          line('events', vis(t), 'ev')
+        } else {
+          if (data === '[DONE]') { line('events', '[DONE] — completion confirmed', 'ev'); continue }
+          out += data
+          line('events', `${fields.id ? '<span class="n">id ' + esc(fields.id) + '</span> ' : ''}${vis(data)}`, 'ev')
+        }
+        $('out').textContent = out
+      }
+    }
+
+    // The tail an unterminated stream leaves behind.
+    if (carry.trim()) line('events', `flushed tail: ${vis(carry)}`, 'ev')
+  } catch (e) {
+    line('events', `${e.name}: ${esc(e.message)}`, 'err')
+  } finally {
+    clearInterval(timer)
+    tick()
+    $('run').disabled = false
+    $('stop').disabled = true
+    controller = null
+    if (route === 'truncated' || route === 'duplicating') {
+      line('events', 'no [DONE] arrived — this answer is incomplete and the protocol never said so', 'err')
+    }
+  }
+}
+
+$('run').onclick = run
+$('stop').onclick = () => controller?.abort()
+$('clear').onclick = clear
+paint()
+</script>
+</body>
+</html>

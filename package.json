@@ -1,0 +1,19 @@
+{
+  "name": "sse-lab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A runnable lab for how Server-Sent Events actually behave under an LLM token stream",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "reads": "node read.mjs chopped reads",
+    "naive": "node read.mjs chopped naive",
+    "blocks": "node read.mjs anthropic blocks",
+    "timing": "node timing.mjs",
+    "backpressure": "node backpressure.mjs",
+    "reconnect": "node reconnect.mjs",
+    "truncated": "node trunc.mjs"
+  },
+  "license": "MIT",
+  "engines": { "node": ">=18" }
+}
