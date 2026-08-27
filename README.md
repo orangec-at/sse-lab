@@ -1,61 +1,78 @@
-# 🧪 SSE Lab: LLM 스트리밍 엔지니어링 & 실험실
+# 🧪 SSE Lab: LLM 스트리밍 엔지니어링 & 프로덕션 시스템 디자인
 
-> **Server-Sent Events(SSE)**가 실제 네트워크(TCP)와 LLM 토큰 스트림 환경에서 어떻게 동작하고, 어디서 데이터가 깨지는지 직접 확인하고 학습하는 종합 실험실입니다.  
-> **Rust 비동기 백엔드** + **Next.js 대시보드** + **Web Worker 기반 Rust WebAssembly 멀티스레드 파서 & 벤치마크 엔진**으로 구성되어 있습니다.
-
----
-
-## 🏛 시스템 아키텍처
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│ [외부 독립 서버] server-rs (Rust Axum + Tokio)                         │
-│ 포트: 8791 (text/event-stream)                                         │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-                                    │ (TCP Socket Chunk Stream)
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ [프론트엔드 Consumer] web/ (Next.js 15 App Router + TypeScript)        │
-│                                                                        │
-│  [3가지 파서 아키텍처 지원]                                            │
-│  ├── 1) Pure TypeScript Parser   : V8 JIT 기반 Carry-Buffer 파서       │
-│  ├── 2) Rust WebAssembly (Main)  : Wasm 선형 메모리 기반 파서          │
-│  └── 3) 🚀 Worker + Wasm (Thread): 별도 OS 백그라운드 스레드 파싱       │
-│                                    (Zero UI Freeze & 60fps 보장)       │
-│                                                                        │
-│  ├── ⚡ Live Benchmark Modal    : FFI 오버헤드 vs Micro-Batching 분석 │
-│  └── app/api/proxy/              : BFF Streaming Relay (Proxy)         │
-└────────────────────────────────────────────────────────────────────────┘
-```
+> **Server-Sent Events(SSE)**가 실제 네트워크(TCP)와 LLM 토큰 스트림 환경에서 어떻게 동작하고 어디서 데이터가 깨지는지 학습하는 실습장이자,  
+> **Rust 비동기 백엔드 + Next.js BFF + Web Worker & Rust Wasm 멀티스레딩**으로 이어지는 **프로덕션 4계층 시스템 디자인(Production 4-Tier System Design)** 프로젝트입니다.
 
 ---
 
-## 🚀 1. Web Worker + Rust Wasm 아키텍처 (Zero UI Freeze)
+## 🏛 1. 프로덕션 시스템 디자인 아키텍처 (Production 4-Tier Architecture)
 
-대규모 LLM 토큰 스트림(예: 초당 1,000+ 토큰 방출) 수신 시, 메인 스레드에서 파싱과 렌더링을 동시에 처리하면 **프레임 드롭(Jank)과 UI 멈춤 현상**이 발생합니다.
+실제 대규모 AI 스트리밍 서비스를 운영하는 기업 관점에서 각 컴포넌트가 배치되는 인프라 계층(Layer)과 데이터 흐름입니다.
 
-이를 완벽하게 해결하기 위해 **Web Worker 전용 백그라운드 스레드**를 도입했습니다:
-* **완전한 스레드 분리**: `fetch()` 스트림 소비와 Wasm Carry-Buffer 파싱을 백그라운드 OS 스레드(`sse-stream.worker.js`)에서 전담.
-* **마이크로 배칭(Micro-Batching)**: 1KB / 16ms 렌더 프레임 단위로 Wasm 파싱을 일괄 수행하여 FFI 오버헤드를 제거하고 메인 스레드로 배치 전달.
-* **60fps UI 보장**: 대시보드 상단의 **`UI Main Thread: 60 FPS`** 모니터를 통해 고속 스트리밍 중에도 UI가 매끄럽게 유지됨을 실시간 확인.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ [Layer 1] Edge & CDN 계층 (CloudFront / Cloudflare / Fastly)                │
+│                                                                             │
+│  • Next.js HTML/JS 정적 번들                                                │
+│  • 🦀 wasm_parser_bg.wasm (80KB 바이너리)  ──► 브라우저가 다운로드 후       │
+│  • 🚀 sse-stream.worker.js (워커 스크립트) ──► 사용자 PC CPU 코어에서 실행   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼ (API 및 스트림 요청)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ [Layer 2] L7 Gateway / Ingress 계층 (AWS ALB / Envoy / Nginx Ingress)       │
+│                                                                             │
+│  • Path Routing:                                                            │
+│     - `GET /v1/stream/*` ──► Layer 4 (Rust SSE 백엔드) 직결 (Buffering Off) │
+│     - `/*`               ──► Layer 3 (Next.js Node 컨테이너)                │
+│  • HTTP/2 종단(Termination) & 300초 장기 커넥션 타임아웃 유지               │
+└───────────────────────┬─────────────────────────────┬───────────────────────┘
+                        │                             │
+                        ▼                             ▼
+┌────────────────────────────────┐ ┌──────────────────────────────────────────┐
+│ [Layer 3] Web / BFF 계층       │ │ [Layer 4] Real-time Streaming Backend 계층│
+│ (K8s Node Pod / ECS Fargate)   │ │ (K8s Rust Pod / ECS DaemonSet)           │
+│                                │ │                                          │
+│ • Next.js App Router (SSR)     │ │ • Rust (Axum + Tokio) SSE Core           │
+│ • 세션 인증, 권한 검증, 보안    │ │ • 수십만 개 장기 소켓 커넥션 무중단 유지 │
+│ • 비-스트리밍 일반 REST API    │ │ • 초경량 메모리 (컨테이너 크기 < 15MB)   │
+└────────────────────────────────┘ └──────────────────────────────────────────┘
+```
+
+### 🔍 계층별 기술적 의사결정 (Why Architecture Matters)
+
+| 계층 | 기술 스택 | 배포 위치 | 핵심 역할 및 아키텍처적 이유 |
+|---|---|---|---|
+| **Layer 1<br>(Edge / Client)** | **Web Worker + Rust Wasm** | S3 / CloudFront (CDN) | **서버 CPU가 아닌 사용자 PC 코어로 파싱 부하 분산.** 메인 스레드와 완전 격리된 별도 백그라운드 스레드에서 Wasm 파싱을 수행하여 초고속 스트림 중에도 **60 FPS UI 무중단 렌더링** 보장. |
+| **Layer 2<br>(L7 Ingress)** | **Nginx / Envoy / AWS ALB** | Ingress Gateway | 스트리밍 경로(`/v1/stream/*`)에 `proxy_buffering off;` 및 `timeout 300s`를 적용하여 중간 버퍼링으로 인한 토큰 지연 방지. 브라우저 커넥션 제한 해소를 위한 **HTTP/2 멀티플렉싱** 적용. |
+| **Layer 3<br>(Web / BFF)** | **Next.js 15 (Node.js)** | K8s Pod / Vercel | SSR 화면 렌더링 및 클라이언트에 노출되면 안 되는 API Key/인증 토큰을 안전하게 숨겨주는 경량 프록시(BFF) 역할. |
+| **Layer 4<br>(Stream Core)** | **Rust (Axum + Tokio)** | K8s Pod / ECS Fargate | Node.js 대비 수십 배 적은 메모리로 **수십만 개의 장기 HTTP 커넥션을 유지**하며, LLM 토큰을 논블로킹 epoll/kqueue 이벤트 루프로 클라이언트에 밀어주는 실시간 전용 백엔드. |
 
 ---
 
-## ⚡ 2. Wasm FFI 바운더리 비용과 Micro-Batching
+## ⚡ 2. 클라이언트 내부 시스템 디자인: Web Worker & Micro-Batching
 
 ```
-[❌ Naive 안티패턴]
-소켓 청크(64B) 수신 ──► JS String ──► Wasm 메모리 복사 ──► Rust 파싱 ──► Serde 역직렬화 (1초에 수천 번 반복 = FFI 병목)
-
-[✅ 실무 권장 패턴: Micro-Batching]
-소켓 청크들을 1KB/16ms 버퍼에 모음 ──► Wasm 1회 일괄 전달 ──► FFI 호출 1/100 급감 (V8 JIT 대비 2배+ 빠름)
+[메인 스레드 (UI Thread)]
+  • 60 FPS Heartbeat 모니터 (Jank 감지)
+  • UI 렌더링에만 100% 집중
+       ▲
+       │ postMessage (16ms Micro-Batched Events 전달)
+       │
+[Web Worker (백그라운드 OS 스레드)]
+  • sse-stream.worker.js
+  • fetch() ReadableStream 수신
+  • 🦀 Rust Wasm Carry-Buffer 파싱 (Zero GC, 선형 메모리 일괄 처리)
 ```
 
-상단의 **`⚡ Live Benchmark`**를 실행하면 아래 4단계 아키텍처의 실제 처리량 차이를 확인할 수 있습니다:
+### 💡 FFI 바운더리 비용 극복: Micro-Batching
+* **문제**: 작은 청크(64B)마다 JS ↔ Wasm 경계를 넘나들면(FFI 호출) 직렬화 오버헤드로 인해 V8 JIT보다 느려집니다.
+* **해결책**: 16ms(60fps 렌더링 주기) 또는 1KB 단위로 버퍼를 모아 Wasm으로 1회 일괄 전달하는 **Micro-Batching**을 적용하여 FFI 비용을 95% 이상 제거.
+
+대시보드 상단의 **`⚡ Live Benchmark`**를 실행하면 아래 4단계 아키텍처의 실제 처리량 차이를 직접 확인할 수 있습니다:
 1. **Pure JavaScript (V8 JIT)**: ~2.5M ev/s (Baseline)
 2. **Rust Wasm (Naive Per-Chunk)**: ~1.4M ev/s (작은 청크마다 FFI 호출로 인한 손해)
-3. **Rust Wasm (Micro-Batched ⭐)**: ~4.5M ev/s (실무 권장 최적 패턴)
+3. **Rust Wasm (Micro-Batched ⭐)**: ~4.5M ev/s (실무 권장 최적 패턴 - JS 대비 2x 빠름)
 4. **Rust Wasm (Native Linear Memory)**: ~8.0M ev/s (순수 Rust 네이티브 한계 속도)
 
 ---
@@ -110,7 +127,7 @@ for (const part of parts) {
 
 ---
 
-## 🔬 5. 10가지 시나리오별 상세 분석 (Lab Scenarios)
+## 🔬 5. 10가지 실험실 시나리오 (Lab Scenarios)
 
 대시보드(`http://localhost:3000`)에서 아래 시나리오들을 직접 실행하며 결과를 비교할 수 있습니다:
 
@@ -129,11 +146,11 @@ for (const part of parts) {
 
 ---
 
-## 🛠 6. 프로덕션 SSE 운영 시 필수 체크리스트
+## 🛠 6. 프로덕션 인프라 체크리스트
 
 1. **Nginx / ALB 버퍼링 해제**
-   * Nginx: `X-Accel-Buffering: no` 헤더 전송 또는 `proxy_buffering off;`
-   * Cloudflare: `Cache-Control: no-transform` 필수
+   * Nginx: `proxy_buffering off;` 및 `X-Accel-Buffering: no` 헤더 필수.
+   * Cloudflare: `Cache-Control: no-transform` 필수.
 2. **UTF-8 멀티바이트 분할 디코딩**
    * 한글이나 이모지는 3~4바이트입니다. 바이트 단위로 쪼개져 들어올 때 글자가 깨지지 않도록 `new TextDecoder('utf-8', { stream: true })` 옵션을 반드시 사용해야 합니다.
 3. **Keep-Alive Heartbeat 전송**
@@ -144,13 +161,6 @@ for (const part of parts) {
 ---
 
 ## 🚀 7. 실행 방법
-
-### 사전 요구사항
-* Node.js >= 18
-* Rust & Cargo (1.80+)
-* wasm-pack
-
-### 실행 명령어
 
 ```bash
 # 1. 의존성 설치 및 Wasm 빌드
@@ -163,6 +173,9 @@ npm run server:rs
 
 # 3. Next.js 클라이언트 대시보드 실행 (포트 3000)
 npm run web
+
+# 4. (선택) Docker Compose 프로덕션 통합 실행
+docker compose up --build
 ```
 
 브라우저에서 **`http://localhost:3000`**으로 접속하여 대시보드 및 Wasm 벤치마크를 확인하세요.
