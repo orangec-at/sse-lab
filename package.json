@@ -5,7 +5,10 @@
   "description": "A runnable lab for how Server-Sent Events actually behave under an LLM token stream",
   "type": "module",
   "scripts": {
-    "start": "node server.mjs",
+    "start": "cargo run --manifest-path server-rs/Cargo.toml",
+    "server:rs": "cargo run --manifest-path server-rs/Cargo.toml",
+    "server:node": "node server.mjs",
+    "web": "npm --prefix web run dev",
     "reads": "node read.mjs chopped reads",
     "naive": "node read.mjs chopped naive",
     "blocks": "node read.mjs anthropic blocks",
