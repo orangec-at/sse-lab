@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSSE } from '@/hooks/useSSE';
 import { BenchmarkModal } from '@/components/BenchmarkModal';
 
@@ -52,6 +52,7 @@ export default function Home() {
   const [currentRoute, setCurrentRoute] = useState('chopped');
   const [useProxy, setUseProxy] = useState(false);
   const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
+  const [fps, setFps] = useState(60);
 
   const {
     status,
@@ -67,6 +68,26 @@ export default function Home() {
     disconnect,
     clear,
   } = useSSE();
+
+  // 메인 스레드 프레임레이트(FPS) 측정용 루프 (UI 블로킹 시각화)
+  useEffect(() => {
+    let frameCount = 0;
+    let lastTime = performance.now();
+    let animId: number;
+
+    const loop = (now: number) => {
+      frameCount++;
+      if (now - lastTime >= 1000) {
+        setFps(frameCount);
+        frameCount = 0;
+        lastTime = now;
+      }
+      animId = requestAnimationFrame(loop);
+    };
+
+    animId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animId);
+  }, []);
 
   const handleRun = () => {
     const fullUrl = `${baseUrl.replace(/\/+$/, '')}/${currentRoute}`;
@@ -84,15 +105,15 @@ export default function Home() {
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold tracking-tight text-white">SSE Lab</h1>
               <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-blue-900/50 text-blue-400 border border-blue-700/50">
-                Rust Axum + Next.js + Rust Wasm
+                Rust Axum + Next.js + Web Worker + Wasm
               </span>
             </div>
             <p className="text-sm text-[#8b949e] mt-1">
-              Deep dive into Server-Sent Events, TCP chunk fragmentation, and Rust WebAssembly parser benchmarking.
+              High-concurrency LLM streaming lab: Carry Buffering, FFI Micro-Batching & Background Worker Threading.
             </p>
           </div>
 
-          {/* Target SSE Server Configuration & Wasm Benchmark Button */}
+          {/* Configuration & Actions */}
           <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={() => setIsBenchmarkOpen(true)}
@@ -124,37 +145,73 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Parser Engine Selector */}
-        <div className="flex items-center justify-between bg-[#161b22] border border-[#262d36] rounded-lg p-3 text-xs">
+        {/* Engine Switcher & 60fps Heartbeat Indicator */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#161b22] border border-[#262d36] rounded-xl p-3.5 text-xs">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-white">Parser Engine:</span>
-            <span className="text-[#8b949e]">Select parser implementation to consume the stream:</span>
+            <span className="font-semibold text-white">Parser Architecture:</span>
+            <span className="text-[#8b949e]">Choose stream consumer thread & engine:</span>
           </div>
-          <div className="flex items-center gap-1.5 bg-[#0d1117] p-1 rounded-md border border-[#262d36]">
-            <button
-              onClick={() => setEngine('typescript')}
-              className={`px-3 py-1 rounded text-xs font-mono transition-colors ${
-                engine === 'typescript'
-                  ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                  : 'text-[#8b949e] hover:text-white'
-              }`}
-            >
-              Pure TypeScript
-            </button>
-            <button
-              onClick={() => setEngine('rust-wasm')}
-              disabled={!wasmReady}
-              className={`px-3 py-1 rounded text-xs font-mono flex items-center gap-1 transition-colors ${
-                engine === 'rust-wasm'
-                  ? 'bg-purple-600 text-white font-semibold shadow-xs'
-                  : wasmReady
-                  ? 'text-[#8b949e] hover:text-white'
-                  : 'opacity-40 cursor-not-allowed'
-              }`}
-            >
-              <span>🦀 Rust WebAssembly</span>
-              {wasmReady && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>}
-            </button>
+
+          <div className="flex items-center gap-3">
+            {/* Main Thread FPS Monitor */}
+            <div className="flex items-center gap-2 px-2.5 py-1 bg-[#0d1117] rounded-md border border-[#262d36]">
+              <span className="relative flex h-2 w-2">
+                <span
+                  className={`animate-ping absolute inline-flex h-full w-full rounded-full ${
+                    fps >= 55 ? 'bg-emerald-400' : 'bg-rose-400'
+                  } opacity-75`}
+                ></span>
+                <span
+                  className={`relative inline-flex rounded-full h-2 w-2 ${
+                    fps >= 55 ? 'bg-emerald-500' : 'bg-rose-500'
+                  }`}
+                ></span>
+              </span>
+              <span className="font-mono text-[11px] text-[#8b949e]">
+                UI Main Thread:{' '}
+                <b className={fps >= 55 ? 'text-emerald-400' : 'text-rose-400'}>{fps} FPS</b>
+              </span>
+            </div>
+
+            {/* Engine Tabs */}
+            <div className="flex items-center gap-1 bg-[#0d1117] p-1 rounded-lg border border-[#262d36]">
+              <button
+                onClick={() => setEngine('typescript')}
+                className={`px-3 py-1 rounded text-xs font-mono transition-colors ${
+                  engine === 'typescript'
+                    ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                    : 'text-[#8b949e] hover:text-white'
+                }`}
+              >
+                Pure TS (Main)
+              </button>
+              <button
+                onClick={() => setEngine('rust-wasm')}
+                disabled={!wasmReady}
+                className={`px-3 py-1 rounded text-xs font-mono transition-colors ${
+                  engine === 'rust-wasm'
+                    ? 'bg-purple-600 text-white font-semibold shadow-xs'
+                    : wasmReady
+                    ? 'text-[#8b949e] hover:text-white'
+                    : 'opacity-40 cursor-not-allowed'
+                }`}
+              >
+                Wasm (Main)
+              </button>
+              <button
+                onClick={() => setEngine('worker-wasm')}
+                className={`px-3 py-1 rounded text-xs font-mono flex items-center gap-1.5 transition-colors ${
+                  engine === 'worker-wasm'
+                    ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                    : 'text-[#8b949e] hover:text-white'
+                }`}
+              >
+                <span>🚀 Worker + Wasm</span>
+                <span className="text-[10px] bg-emerald-950 text-emerald-300 px-1 rounded border border-emerald-700/50">
+                  Zero UI Lag
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -301,7 +358,11 @@ export default function Home() {
             <div className="px-4 py-2.5 border-b border-[#262d36] flex items-center justify-between text-xs font-semibold text-[#8b949e] uppercase tracking-wider">
               <span>Events After Carry Buffering</span>
               <span className="text-[10px] text-emerald-400/80 font-mono">
-                {engine === 'rust-wasm' ? '🦀 Wasm Engine' : '⚡ TS Engine'}
+                {engine === 'worker-wasm'
+                  ? '🚀 Worker + Wasm'
+                  : engine === 'rust-wasm'
+                  ? '🦀 Main Wasm'
+                  : '⚡ Pure TS'}
               </span>
             </div>
             <div className="p-3 h-80 overflow-y-auto font-mono text-xs space-y-1 bg-[#0d1117]/50">
