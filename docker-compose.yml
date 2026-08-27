@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # 1. Rust SSE 백엔드 스트리밍 서버
+  server-rs:
+    build:
+      context: ./server-rs
+      dockerfile: Dockerfile
+    ports:
+      - "8791:8791"
+    environment:
+      - PORT=8791
+      - RUST_LOG=info
+    restart: unless-stopped
+
+  # 2. Next.js 프론트엔드 대시보드 & BFF
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    depends_on:
+      - server-rs
+    restart: unless-stopped
